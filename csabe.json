@@ -1,0 +1,133 @@
+    /** std::vector<MemoryFlag> flags = {
+        {"TaskSchedulerTargetFps", 0x77958B4, 9999},
+        {"RenderShadowmapBias", 0x6A3B178, -1},
+        {"FastGPULightCulling3", 0x77D7030, 1},
+        {"DebugForceMSAASamples", 0x775B52C, 1},
+        {"FRMMaxGrassDistance", 0x6A46C88, 0},
+        {"DebugFRMQualityLevelOverride", 0x775EAC4, 4},
+        {"HandleAltEnterFullscreenManually", 0x78AB208, 1},
+        {"RakNetLoopMs", 0x6A40538, 1},
+        {"RakNetPingFrequencyMillisecond", 0x6A3F12C, 10},
+        {"ClientPacketMaxDelayMs", 0x6A3ACBC, 1},
+        {"ClientPacketMaxFrameMicroseconds", 0x6A3ACC8, 1},
+        {"ClientPacketHealthyMsPerSecondLimit", 0x6A3ACD4, 1},
+        {"MaxProcessPacketsJobScaling", 0x6A3ACAC, 2139999999},
+        {"MaxProcessPacketsStepsAccumulated", 0x6A3ACB8, 0},
+        {"MaxProcessPacketsStepsPerCyclic", 0x6A3ACB4, 2139999999},
+        {"S2PhysicsSenderRate", 0x6A5286C, 1},
+        {"WorldStepMax", 0x6A3EAC8, 1},
+        {"MaxMissedWorldStepsRemembered", 0x6A3EABC, 1},
+        {"RakNetResendBufferArrayLength", 0x6A40864, 128},
+        {"RakNetResendMaxThresholdTimeInUs", 0x6A40894, 10000},
+        {"RakNetResendMinThresholdTimeInUs", 0x6A40890, 5000},
+        {"RakNetResendRttMultiple", 0x6A4088C, 1},
+        {"RakNetResendScaleBackFactorHundredthsPercent", 0x775E560, 50},
+        {"InterpolationMaxDelayMSec", 0x6A3EB34, 1},
+        {"InterpolationAwareTargetTimeLerpHundredth", 0x6A3EB2C, 100},
+        {"InterpolationDtLimitForLod", 0x6A3EBBC, 1},
+        {"DebugSimPrimalStiffnessMax", 0x6A47370, 0},
+        {"BloomFrmCutoff", 0x6A3AFB0, -1},
+        {"RobloxGuiBlurIntensity", 0x6A560B4, 0},
+        {"RenderLocalLightUpdatesMax", 0x6A3B188, 1},
+        {"ClientPacketExcessMicroseconds", 0x6A3ACC0, 1},
+        {"DiffractionSolverUsesGraphicsQualityLevel", 0x7876538, 3},
+        {"GameNetPVHeaderRotationOrientIdToleranceExponent", 0x6A3ACF4, -1},
+        {"RenderLocalLightUpdatesMin", 0x6A3B184, 1},
+        {"RenderLocalLightFadeInMs", 0x6A3B18C, 0},
+        {"RenderReportGfxQualityLevel", 0x77D2900, 1},
+        {"SimBlockLargeLocalToolWeldManipulationsThreshold", 0x6A3AC84, -1}
+    }; */
+
+    //lista flags antigas:
+          std::vector<MemoryFlag> flags = {
+
+        {"TaskSchedulerTargetFps", 0x76A8730, 9999},
+
+        {"RenderShadowmapBias", 0x695A144, -1},
+
+       // {"DebugGraphicsDisableDirect3D11", 0x77BA708, 1},
+
+        //{"DebugGraphicsPreferVulkan", 0x76CC9E0, 1},
+
+        {"FastGPULightCulling3", 0x76E9700, 1},
+
+        //{"DebugSkyGray", 0x76E9448, 1},
+
+        {"DebugForceMSAASamples", 0x766F404, 1},
+
+        {"FRMMaxGrassDistance", 0x6965C3C, 0},
+
+        {"DebugFRMQualityLevelOverride", 0x767198C, 4},
+
+        {"HandleAltEnterFullscreenManually", 0x77B89B8, 1},
+
+        {"RakNetLoopMs", 0x695E16C, 1},
+
+        {"RakNetPingFrequencyMillisecond", 0x695F328, 10},
+
+        {"ClientPacketMaxDelayMs", 0x6959C90, 1},
+
+        {"ClientPacketMaxFrameMicroseconds", 0x6959C98, 1},
+
+        {"ClientPacketHealthyMsPerSecondLimit", 0x6959CA4, 1},
+
+        {"MaxProcessPacketsJobScaling", 0x6959CC0, 2139999999},
+
+        {"MaxProcessPacketsStepsAccumulated", 0x6959CC4, 0},
+
+        {"MaxProcessPacketsStepsPerCyclic", 0x6959CC8, 2139999999},
+
+        {"S2PhysicsSenderRate", 0x697176C, 1},
+
+        {"WorldStepMax", 0x695DAAC, 1},
+
+        {"MaxMissedWorldStepsRemembered", 0x695DAB4, 1},
+
+        {"RakNetResendBufferArrayLength", 0x695F808, 128},
+
+        {"RakNetResendMaxThresholdTimeInUs", 0x695F838, 10000},
+
+        {"RakNetResendMinThresholdTimeInUs", 0x695F830, 5000},
+
+        {"RakNetResendRttMultiple", 0x695F834, 1},
+
+        {"RakNetResendScaleBackFactorHundredthsPercent", 0x7671418, 50},
+
+        //{"DebugDeterministicParticles", 0x76E8780, 1},
+
+        {"InterpolationMaxDelayMSec", 0x695DAF0, 1},
+
+        {"InterpolationAwareTargetTimeLerpHundredth", 0x695DAF8, 100},
+
+        {"InterpolationDtLimitForLod", 0x695DB70, 1}, //1
+
+        {"DebugSimPrimalStiffnessMax", 0x69662DC, 0},
+
+        //se isso fuder tudo tira:
+        {"BloomFrmCutoff", 0x6959F9C, -1},
+
+        {"RobloxGuiBlurIntensity", 0x6974F88, 0},
+
+        {"RenderLocalLightUpdatesMax", 0x695A158, 1},
+
+        {"ClientPacketExcessMicroseconds", 0x6959C94, 1},
+
+        {"DiffractionSolverUsesGraphicsQualityLevel", 0x77839D8, 3},
+
+        {"GameNetPVHeaderRotationOrientIdToleranceExponent", 0x6959D14, -1},
+
+        {"RenderLocalLightUpdatesMin", 0x695A154, 1},
+
+        {"RenderLocalLightFadeInMs", 0x695A150, 0},
+
+        {"RenderReportGfxQualityLevel", 0x76E5180, 1},
+
+        //{"TextureCompositorActiveJobs", 0x6959FB0, 0},
+
+
+        //aq
+
+        {"SimBlockLargeLocalToolWeldManipulationsThreshold", 0x6959C8C, -1}
+
+    };
+     
