@@ -1,317 +1,273 @@
 #define _WIN32_WINNT 0x0A00
 #include <windows.h>
-#include <vector>
 #include <tlhelp32.h>
-#include <mmsystem.h>
-#include <powrprof.h>
-#include <winternl.h>
+#include <commdlg.h>
 #include <thread>
+#include <string>
+#include <stdio.h>
 
-struct MemoryFlag {
-    const char* name;
-    uintptr_t offset;
-    int value;
-};
+HWND janelaPrincipal, caixaTextoProcesso, botaoSelecionar, caixaTextoDll, botaoProcurarDll;
+HWND botaoApenasInjetar, botaoApenasOtimizar, botaoAmbos, textoStatus;
+HWND janelaListaProcessos, caixaListaProcessos, botaoAtualizarLista, botaoConfirmarLista;
 
-// Adicionado hBtnDll
-HWND hBtnDll, hBtn1, hBtn2, hStatus;
+bool VerificarCompatibilidade(HANDLE manipuladorProcesso) {
+    BOOL ehWow64 = FALSE;
+    IsWow64Process(manipuladorProcesso, &ehWow64);
 
-void AplicarPrioridadePersistente() {
-    HKEY hKey;
-    const wchar_t* path = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\RobloxPlayerBeta.exe\\PerfOptions";
-    LSTATUS status = RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL);
-
-    if (status == ERROR_SUCCESS) {
-        DWORD priority = 3; 
-        RegSetValueExW(hKey, L"CpuPriorityClass", 0, REG_DWORD, (const BYTE*)&priority, sizeof(priority));
-        RegCloseKey(hKey);
-    }
-}
-
-uintptr_t GetModuleBaseAddress(DWORD procId, const wchar_t* modName) {
-    uintptr_t modBaseAddr = 0;
-    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, procId);
-    if (hSnap != INVALID_HANDLE_VALUE) {
-        MODULEENTRY32W modEntry;
-        modEntry.dwSize = sizeof(modEntry);
-        if (Module32FirstW(hSnap, &modEntry)) {
-            do {
-                if (!_wcsicmp(modEntry.szModule, modName)) {
-                    modBaseAddr = (uintptr_t)modEntry.modBaseAddr;
-                    break;
-                }
-            } while (Module32NextW(hSnap, &modEntry));
-        }
-    }
-    CloseHandle(hSnap);
-    return modBaseAddr;
-}
-
-bool InjetarDLL(HANDLE hProc, const char* dllNome) {
-    char caminhoCompleto[MAX_PATH];
-    if (GetFullPathNameA(dllNome, MAX_PATH, caminhoCompleto, NULL) == 0) {
-        return false;
-    }
-
-    LPVOID pDllPath = VirtualAllocEx(hProc, 0, strlen(caminhoCompleto) + 1, MEM_COMMIT, PAGE_READWRITE);
-    if (!pDllPath) return false;
-
-    WriteProcessMemory(hProc, pDllPath, (LPVOID)caminhoCompleto, strlen(caminhoCompleto) + 1, 0);
-
-    HMODULE hKernel32 = GetModuleHandleA("Kernel32.dll");
-    LPVOID pLoadLibrary = (LPVOID)GetProcAddress(hKernel32, "LoadLibraryA");
-
-    HANDLE hThread = CreateRemoteThread(hProc, NULL, 0, (LPTHREAD_START_ROUTINE)pLoadLibrary, pDllPath, 0, NULL);
-    if (!hThread) {
-        VirtualFreeEx(hProc, pDllPath, 0, MEM_RELEASE);
-        return false;
-    }
-
-    WaitForSingleObject(hThread, INFINITE);
-    CloseHandle(hThread);
-    VirtualFreeEx(hProc, pDllPath, 0, MEM_RELEASE);
+    SYSTEM_INFO infoSistema;
+    GetNativeSystemInfo(&infoSistema);
     
+    bool sistemaEh64Bits = (infoSistema.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 || 
+                            infoSistema.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64);
+    
+    bool jogoEh32Bits = sistemaEh64Bits ? (ehWow64 != FALSE) : true;
+
+    #if defined(_WIN64)
+        bool injetorEh32Bits = false; 
+    #else
+        bool injetorEh32Bits = true;  
+    #endif
+
+    if (jogoEh32Bits != injetorEh32Bits) {
+        if (injetorEh32Bits) {
+            MessageBoxA(NULL, "Erro: O injetor é 32 bits, mas o jogo é 64 bits!", "Incompatibilidade de arquitetura", MB_ICONERROR);
+        } else {
+            MessageBoxA(NULL, "Erro: O injetor é 64 bits, mas o jogo é 32 bits!", "Incompatibilidade de arquitetura", MB_ICONERROR);
+        }
+        return false;
+    }
+    return true; 
+}
+
+DWORD ObterIdProcessoPorNome(const char* nomeProcesso) {
+    PROCESSENTRY32 entradaProcesso;
+    HANDLE snapshotProcessos = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    entradaProcesso.dwSize = sizeof(PROCESSENTRY32);
+    
+    if (Process32First(snapshotProcessos, &entradaProcesso)) {
+        do {
+            if (!_stricmp(entradaProcesso.szExeFile, nomeProcesso)) {
+                CloseHandle(snapshotProcessos);
+                return entradaProcesso.th32ProcessID;
+            }
+        } while (Process32Next(snapshotProcessos, &entradaProcesso));
+    }
+    CloseHandle(snapshotProcessos);
+    return 0;
+}
+
+bool InjetarDll(HANDLE manipuladorProcesso, const char* caminhoDll) {
+    char caminhoCompleto[MAX_PATH];
+    if (GetFullPathNameA(caminhoDll, MAX_PATH, caminhoCompleto, NULL) == 0) return false;
+
+    LPVOID enderecoDll = VirtualAllocEx(manipuladorProcesso, 0, strlen(caminhoCompleto) + 1, MEM_COMMIT, PAGE_READWRITE);
+    if (!enderecoDll) return false;
+
+    WriteProcessMemory(manipuladorProcesso, enderecoDll, (LPVOID)caminhoCompleto, strlen(caminhoCompleto) + 1, 0);
+
+    HMODULE moduloKernel = GetModuleHandleA("Kernel32.dll");
+    LPVOID enderecoLoadLibrary = (LPVOID)GetProcAddress(moduloKernel, "LoadLibraryA");
+
+    HANDLE threadRemota = CreateRemoteThread(manipuladorProcesso, NULL, 0, (LPTHREAD_START_ROUTINE)enderecoLoadLibrary, enderecoDll, 0, NULL);
+    if (!threadRemota) {
+        VirtualFreeEx(manipuladorProcesso, enderecoDll, 0, MEM_RELEASE);
+        return false;
+    }
+
+    WaitForSingleObject(threadRemota, INFINITE);
+    CloseHandle(threadRemota);
+    VirtualFreeEx(manipuladorProcesso, enderecoDll, 0, MEM_RELEASE);
     return true;
 }
 
-// Nova função apenas para o botão de injeção
-void ExecutarInjecao() {
-    SetWindowTextA(hStatus, "Status: Aguardando Roblox para Injetar DLL...");
+void ExecutarAcao(std::string nomeProcesso, std::string caminhoDll, bool flagInjetar, bool flagOtimizar) {
+    std::string mensagemStatus = "Status: Aguardando " + nomeProcesso + "...";
+    SetWindowTextA(textoStatus, mensagemStatus.c_str());
     
-    DWORD procId = 0;
-    while (!procId) {
-        HWND hwnd = FindWindowA(NULL, "Roblox");
-        if (hwnd) GetWindowThreadProcessId(hwnd, &procId);
-        Sleep(1000);
+    DWORD idProcesso = 0;
+    while (!idProcesso) {
+        idProcesso = ObterIdProcessoPorNome(nomeProcesso.c_str());
+        if (!idProcesso) Sleep(1000);
     }
 
-    HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, procId);
-    if (hProc) {
-        if (InjetarDLL(hProc, "memalloc.dll")) {
-            SetWindowTextA(hStatus, "Status: memalloc.dll Injetada com Sucesso!");
-        } else {
-            SetWindowTextA(hStatus, "Status: Falha ao injetar memalloc.dll.");
-        }
-        CloseHandle(hProc);
-    } else {
-        SetWindowTextA(hStatus, "Status: ERRO! Execute como Administrador.");
-    }
-}
+    HANDLE manipuladorProcesso = OpenProcess(PROCESS_ALL_ACCESS, FALSE, idProcesso);
+    if (manipuladorProcesso) {
+        SetWindowTextA(textoStatus, "Status: Processo encontrado. Aplicando...");
 
-void ExecutarOtimizador(int choice) {
-    SetWindowTextA(hStatus, "Status: Aguardando RobloxPlayerBeta.exe...");
+        if (flagOtimizar) {
+            SetPriorityClass(manipuladorProcesso, HIGH_PRIORITY_CLASS);
 
-    std::vector<MemoryFlag> flags = {
-{"TaskSchedulerTargetFps", 0x76A8730, 9999},
+            SYSTEM_INFO infoSistema;
+            GetSystemInfo(&infoSistema);
+            DWORD_PTR afinidade = (1ULL << infoSistema.dwNumberOfProcessors) - 1;
+            SetProcessAffinityMask(manipuladorProcesso, afinidade);
 
-        {"RenderShadowmapBias", 0x695A144, -1},
+            // 5 gb
+            SIZE_T memoriaAlvo = 5ULL * 1024 * 1024 * 1024; 
+            // 256 mb
+            SIZE_T tamanhoBloco = 256 * 1024 * 1024;        
+            int quantidadeBlocos = memoriaAlvo / tamanhoBloco;
 
-       // {"DebugGraphicsDisableDirect3D11", 0x77BA708, 1},
-
-        //{"DebugGraphicsPreferVulkan", 0x76CC9E0, 1},
-
-        {"FastGPULightCulling3", 0x76E9700, 1},
-
-        //{"DebugSkyGray", 0x76E9448, 1},
-
-        {"DebugForceMSAASamples", 0x766F404, 1},
-
-        {"FRMMaxGrassDistance", 0x6965C3C, 0},
-
-        {"DebugFRMQualityLevelOverride", 0x767198C, 4},
-
-        {"HandleAltEnterFullscreenManually", 0x77B89B8, 1},
-
-        {"RakNetLoopMs", 0x695E16C, 1},
-
-        {"RakNetPingFrequencyMillisecond", 0x695F328, 10},
-
-        {"ClientPacketMaxDelayMs", 0x6959C90, 1},
-
-        {"ClientPacketMaxFrameMicroseconds", 0x6959C98, 1},
-
-        {"ClientPacketHealthyMsPerSecondLimit", 0x6959CA4, 1},
-
-        {"MaxProcessPacketsJobScaling", 0x6959CC0, 2139999999},
-
-        {"MaxProcessPacketsStepsAccumulated", 0x6959CC4, 0},
-
-        {"MaxProcessPacketsStepsPerCyclic", 0x6959CC8, 2139999999},
-
-        {"S2PhysicsSenderRate", 0x697176C, 1},
-
-        {"WorldStepMax", 0x695DAAC, 1},
-
-        {"MaxMissedWorldStepsRemembered", 0x695DAB4, 1},
-
-        {"RakNetResendBufferArrayLength", 0x695F808, 128},
-
-        {"RakNetResendMaxThresholdTimeInUs", 0x695F838, 10000},
-
-        {"RakNetResendMinThresholdTimeInUs", 0x695F830, 5000},
-
-        {"RakNetResendRttMultiple", 0x695F834, 1},
-
-        {"RakNetResendScaleBackFactorHundredthsPercent", 0x7671418, 50},
-
-        //{"DebugDeterministicParticles", 0x76E8780, 1},
-
-        {"InterpolationMaxDelayMSec", 0x695DAF0, 1},
-
-        {"InterpolationAwareTargetTimeLerpHundredth", 0x695DAF8, 100},
-
-        {"InterpolationDtLimitForLod", 0x695DB70, 1}, //1
-
-        {"DebugSimPrimalStiffnessMax", 0x69662DC, 0},
-
-        //se isso fuder tudo tira:
-        {"BloomFrmCutoff", 0x6959F9C, -1},
-
-        {"RobloxGuiBlurIntensity", 0x6974F88, 0},
-
-        {"RenderLocalLightUpdatesMax", 0x695A158, 1},
-
-        {"ClientPacketExcessMicroseconds", 0x6959C94, 1},
-
-        {"DiffractionSolverUsesGraphicsQualityLevel", 0x77839D8, 3},
-
-        {"GameNetPVHeaderRotationOrientIdToleranceExponent", 0x6959D14, -1},
-
-        {"RenderLocalLightUpdatesMin", 0x695A154, 1},
-
-        {"RenderLocalLightFadeInMs", 0x695A150, 0},
-
-        {"RenderReportGfxQualityLevel", 0x76E5180, 1},
-
-        //{"TextureCompositorActiveJobs", 0x6959FB0, 0},
-
-
-        //aq
-
-        {"SimBlockLargeLocalToolWeldManipulationsThreshold", 0x6959C8C, -1}
-    };
-
-    DWORD procId = 0;
-    while (!procId) {
-        HWND hwnd = FindWindowA(NULL, "Roblox");
-        if (hwnd) GetWindowThreadProcessId(hwnd, &procId);
-        Sleep(1000);
-    }
-
-    uintptr_t baseAddr = GetModuleBaseAddress(procId, L"RobloxPlayerBeta.exe");
-    HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, procId);
-
-    if (hProc && baseAddr) {
-        SetWindowTextA(hStatus, "Status: Otimizando Processo...");
-
-        // tirei o bglh coloca dnv se der merda
-
-        SetPriorityClass(hProc, HIGH_PRIORITY_CLASS);
-
-        SYSTEM_INFO sysInfo;
-        GetSystemInfo(&sysInfo);
-        DWORD_PTR affinity = (1ULL << sysInfo.dwNumberOfProcessors) - 1;
-        SetProcessAffinityMask(hProc, affinity);
-
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-            RegSetValueExW(hKey, L"Priority", 0, REG_SZ, (BYTE*)L"6", 4);
-            RegSetValueExW(hKey, L"Scheduling Category", 0, REG_SZ, (BYTE*)L"High", 8);
-            RegSetValueExW(hKey, L"SFIO Priority", 0, REG_SZ, (BYTE*)L"High", 8);
-            RegCloseKey(hKey);
-        }
-
-        typedef NTSTATUS (NTAPI *pNtSetInformationProcess)(HANDLE, ULONG, PVOID, ULONG);
-        auto NtSet = (pNtSetInformationProcess)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationProcess");
-        
-        ULONG quantum = 0xFF;
-        NtSet(hProc, 29, &quantum, sizeof(quantum));
-
-        ULONG disableParking = 1;
-        NtSet(hProc, 0x1D, &disableParking, sizeof(disableParking));
-
-        SIZE_T targetRAM = 5ULL * 1024 * 1024 * 1024; 
-        SIZE_T chunkSize = 512 * 1024 * 1024;
-        int numChunks = targetRAM / chunkSize;
-
-        for (int i = 0; i < numChunks; i++) {
-            LPVOID remoteMem = VirtualAllocEx(hProc, NULL, chunkSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            if (remoteMem) {
-                char dummy = 1;
-                WriteProcessMemory(hProc, remoteMem, &dummy, 1, NULL);
-            }
-        }
-
-        if (choice == 1) {
-            SetWindowTextA(hStatus, "Status: Dump injetado. Monitorando...");
-            while (true) {
-                DWORD exitCode;
-                GetExitCodeProcess(hProc, &exitCode);
-                if (exitCode != STILL_ACTIVE) break;
-
-                for (const auto& flag : flags) {
-                    uintptr_t target = baseAddr + flag.offset;
-                    DWORD oldProtect;
-
-                    if (VirtualProtectEx(hProc, (LPVOID)target, sizeof(int), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-                        WriteProcessMemory(hProc, (LPVOID)target, &flag.value, sizeof(int), NULL);
-                        VirtualProtectEx(hProc, (LPVOID)target, sizeof(int), oldProtect, &oldProtect);
-                    }
+            for (int i = 0; i < quantidadeBlocos; i++) {
+                LPVOID memoriaRemota = VirtualAllocEx(manipuladorProcesso, NULL, tamanhoBloco, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                if (memoriaRemota) {
+                    char valorFicticio = 1;
+                    WriteProcessMemory(manipuladorProcesso, memoriaRemota, &valorFicticio, 1, NULL);
                 }
-                Sleep(20000);
             }
-            SetWindowTextA(hStatus, "Status: Jogo Fechado.");
-        } else {
-            SetWindowTextA(hStatus, "Status: Otimizado. Monitorando...");
-            
-            while (true) {
-                DWORD exitCode;
-                GetExitCodeProcess(hProc, &exitCode);
-                if (exitCode != STILL_ACTIVE) break;
-                Sleep(5000); 
-            }
-            SetWindowTextA(hStatus, "Status: Jogo Fechado.");
         }
 
-        CloseHandle(hProc);
+        if (flagInjetar) {
+            if (!VerificarCompatibilidade(manipuladorProcesso)) {
+                SetWindowTextA(textoStatus, "Status: Falha - Arquiteturas incompatíveis.");
+                CloseHandle(manipuladorProcesso);
+                return;
+            }
+
+            if (!InjetarDll(manipuladorProcesso, caminhoDll.c_str())) {
+                SetWindowTextA(textoStatus, "Status: Falha ao injetar a DLL.");
+                CloseHandle(manipuladorProcesso);
+                return;
+            }
+        }
+
+        SetWindowTextA(textoStatus, "Sucesso");
+        CloseHandle(manipuladorProcesso);
     } else {
-        SetWindowTextA(hStatus, "Status: ERRO! Execute como Administrador.");
+        SetWindowTextA(textoStatus, "Status: ERRO! Execute como administrador.");
     }
 }
 
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+void IniciarThread(bool flagInjetar, bool flagOtimizar) {
+    char bufferProcesso[MAX_PATH];
+    GetWindowTextA(caixaTextoProcesso, bufferProcesso, MAX_PATH);
+    std::string nomeProcesso(bufferProcesso);
+
+    char bufferDll[MAX_PATH];
+    GetWindowTextA(caixaTextoDll, bufferDll, MAX_PATH);
+    std::string caminhoDll(bufferDll);
+
+    if (nomeProcesso.empty()) {
+        SetWindowTextA(textoStatus, "Status: Selecione um processo primeiro!");
+        return;
+    }
+    
+    if (flagInjetar && caminhoDll.empty()) {
+        SetWindowTextA(textoStatus, "Status: Selecione uma DLL primeiro!");
+        return;
+    }
+
+    std::thread(ExecutarAcao, nomeProcesso, caminhoDll, flagInjetar, flagOtimizar).detach();
+}
+
+void SelecionarArquivoDll() {
+    OPENFILENAMEA estruturaArquivo;
+    char arquivoSelecionado[MAX_PATH] = {0};
+
+    ZeroMemory(&estruturaArquivo, sizeof(estruturaArquivo));
+    estruturaArquivo.lStructSize = sizeof(estruturaArquivo);
+    estruturaArquivo.hwndOwner = janelaPrincipal;
+    estruturaArquivo.lpstrFile = arquivoSelecionado;
+    estruturaArquivo.nMaxFile = sizeof(arquivoSelecionado);
+    estruturaArquivo.lpstrFilter = "Arquivos DLL (*.dll)\0*.dll\0Todos os arquivos (*.*)\0*.*\0";
+    estruturaArquivo.nFilterIndex = 1;
+    estruturaArquivo.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    if (GetOpenFileNameA(&estruturaArquivo) == TRUE) {
+        SetWindowTextA(caixaTextoDll, estruturaArquivo.lpstrFile);
+    }
+}
+
+void AtualizarListaProcessos() {
+    SendMessage(caixaListaProcessos, LB_RESETCONTENT, 0, 0); 
+    HANDLE snapshotProcessos = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 entradaProcesso;
+    entradaProcesso.dwSize = sizeof(PROCESSENTRY32);
+
+    if (Process32First(snapshotProcessos, &entradaProcesso)) {
+        do {
+            char bufferTexto[512];
+            snprintf(bufferTexto, sizeof(bufferTexto), "[%04d] %s", entradaProcesso.th32ProcessID, entradaProcesso.szExeFile);
+            SendMessageA(caixaListaProcessos, LB_ADDSTRING, 0, (LPARAM)bufferTexto);
+        } while (Process32Next(snapshotProcessos, &entradaProcesso));
+    }
+    CloseHandle(snapshotProcessos);
+}
+
+void ConfirmarSelecaoLista() {
+    int indiceSelecionado = SendMessage(caixaListaProcessos, LB_GETCURSEL, 0, 0);
+    if (indiceSelecionado != LB_ERR) {
+        char bufferTexto[512];
+        SendMessageA(caixaListaProcessos, LB_GETTEXT, indiceSelecionado, (LPARAM)bufferTexto);
+        
+        char* nomeExecutavel = strchr(bufferTexto, ']');
+        if (nomeExecutavel) {
+            nomeExecutavel += 2; 
+            SetWindowTextA(caixaTextoProcesso, nomeExecutavel);
+            ShowWindow(janelaListaProcessos, SW_HIDE); 
+        }
+    }
+}
+
+LRESULT CALLBACK ProcedimentoJanelaLista(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE:
-            // .
-            hBtnDll = CreateWindowA("BUTTON", "Injetar memalloc.dll",
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                20, 20, 250, 40, hwnd, (HMENU)3, NULL, NULL);
+            caixaListaProcessos = CreateWindowA("LISTBOX", NULL,
+                WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER | LBS_NOTIFY,
+                10, 10, 260, 200, hwnd, (HMENU)100, NULL, NULL);
 
-            // 2
-            hBtn1 = CreateWindowA("BUTTON", "1 - Otimizar e Colocar Bandeiras",
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                20, 70, 250, 40, hwnd, (HMENU)1, NULL, NULL);
-            
-            hBtn2 = CreateWindowA("BUTTON", "2 - Apenas Otimizar",
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                20, 120, 250, 40, hwnd, (HMENU)2, NULL, NULL);
+            botaoAtualizarLista = CreateWindowA("BUTTON", "Atualizar",
+                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                10, 220, 100, 30, hwnd, (HMENU)101, NULL, NULL);
 
-            hStatus = CreateWindowA("STATIC", "Status: Aguardando escolha...",
-                WS_VISIBLE | WS_CHILD,
-                20, 175, 250, 40, hwnd, NULL, NULL, NULL);
+            botaoConfirmarLista = CreateWindowA("BUTTON", "Confirmar",
+                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                170, 220, 100, 30, hwnd, (HMENU)102, NULL, NULL);
             break;
 
         case WM_COMMAND:
-            if (LOWORD(wParam) == 3) {
-                // 3
-                std::thread(ExecutarInjecao).detach();
-            } 
-            else if (LOWORD(wParam) == 1 || LOWORD(wParam) == 2) {
-                // v
-                EnableWindow(hBtn1, FALSE);
-                EnableWindow(hBtn2, FALSE);
-                std::thread(ExecutarOtimizador, LOWORD(wParam)).detach();
+            if (LOWORD(wParam) == 101) AtualizarListaProcessos();
+            if (LOWORD(wParam) == 102) ConfirmarSelecaoLista();
+            if (LOWORD(wParam) == 100 && HIWORD(wParam) == LBN_DBLCLK) ConfirmarSelecaoLista();
+            break;
+
+        case WM_CLOSE:
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+    }
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
+LRESULT CALLBACK ProcedimentoJanelaPrincipal(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+        case WM_CREATE:
+            CreateWindowA("STATIC", "Processo alvo:", WS_VISIBLE | WS_CHILD, 20, 15, 250, 20, hwnd, NULL, NULL, NULL);
+            caixaTextoProcesso = CreateWindowA("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 20, 35, 170, 25, hwnd, NULL, NULL, NULL);
+            botaoSelecionar = CreateWindowA("BUTTON", "Selecionar", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 200, 35, 70, 25, hwnd, (HMENU)4, NULL, NULL);
+
+            CreateWindowA("STATIC", "Caminho da DLL:", WS_VISIBLE | WS_CHILD, 20, 70, 250, 20, hwnd, NULL, NULL, NULL);
+            caixaTextoDll = CreateWindowA("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 20, 90, 170, 25, hwnd, NULL, NULL, NULL);
+            botaoProcurarDll = CreateWindowA("BUTTON", "Procurar", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 200, 90, 70, 25, hwnd, (HMENU)5, NULL, NULL);
+
+            botaoApenasInjetar = CreateWindowA("BUTTON", "Apenas injetar", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 20, 130, 250, 35, hwnd, (HMENU)1, NULL, NULL);
+            botaoApenasOtimizar = CreateWindowA("BUTTON", "Apenas otimizar CPU", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 20, 175, 250, 35, hwnd, (HMENU)2, NULL, NULL);
+            botaoAmbos = CreateWindowA("BUTTON", "Injetar e otimizar", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 20, 220, 250, 35, hwnd, (HMENU)3, NULL, NULL);
+
+            textoStatus = CreateWindowA("STATIC", "Status: Aguardando...", WS_VISIBLE | WS_CHILD, 20, 265, 250, 40, hwnd, NULL, NULL, NULL);
+            break;
+
+        case WM_COMMAND:
+            if (LOWORD(wParam) == 1) IniciarThread(true, false);
+            if (LOWORD(wParam) == 2) IniciarThread(false, true);
+            if (LOWORD(wParam) == 3) IniciarThread(true, true);
+            
+            if (LOWORD(wParam) == 4) { 
+                AtualizarListaProcessos();
+                ShowWindow(janelaListaProcessos, SW_SHOW);
+                SetForegroundWindow(janelaListaProcessos);
             }
+
+            if (LOWORD(wParam) == 5) SelecionarArquivoDll();
             break;
 
         case WM_DESTROY:
@@ -321,31 +277,38 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
-int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    AplicarPrioridadePersistente();
+int APIENTRY WinMain(HINSTANCE instanciaAplicativo, HINSTANCE instanciaAnterior, LPSTR linhaComando, int estadoExibicao) {
+    WNDCLASSA classePrincipal = {0};
+    classePrincipal.lpfnWndProc = ProcedimentoJanelaPrincipal;
+    classePrincipal.hInstance = instanciaAplicativo;
+    classePrincipal.lpszClassName = "ClasseOtimizadorGenerico";
+    classePrincipal.hbrBackground = (HBRUSH)(COLOR_WINDOW);
+    RegisterClassA(&classePrincipal);
 
-    WNDCLASSA wc = {0};
-    wc.lpfnWndProc = WindowProc;
-    wc.hInstance = hInstance;
-    wc.lpszClassName = "RobloxOptClass";
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW);
+    WNDCLASSA classeLista = {0};
+    classeLista.lpfnWndProc = ProcedimentoJanelaLista;
+    classeLista.hInstance = instanciaAplicativo;
+    classeLista.lpszClassName = "ClasseListaProcessos";
+    classeLista.hbrBackground = (HBRUSH)(COLOR_WINDOW);
+    RegisterClassA(&classeLista);
 
-    RegisterClassA(&wc);
-
-    // so altura
-    HWND hwnd = CreateWindowA("RobloxOptClass", "Roblox Optimizer Engine",
+    janelaPrincipal = CreateWindowA("ClasseOtimizadorGenerico", "Necomizer",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, 
-        CW_USEDEFAULT, CW_USEDEFAULT, 310, 270,
-        NULL, NULL, hInstance, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 310, 360,
+        NULL, NULL, instanciaAplicativo, NULL);
 
-    ShowWindow(hwnd, nCmdShow);
+    janelaListaProcessos = CreateWindowA("ClasseListaProcessos", "Selecione o processo",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, 
+        CW_USEDEFAULT, CW_USEDEFAULT, 300, 300,
+        janelaPrincipal, NULL, instanciaAplicativo, NULL);
 
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+    ShowWindow(janelaPrincipal, estadoExibicao);
+
+    MSG mensagemSistema;
+    while (GetMessage(&mensagemSistema, NULL, 0, 0)) {
+        TranslateMessage(&mensagemSistema);
+        DispatchMessage(&mensagemSistema);
     }
     return 0;
 }
-
-//cmp: g++ -o app.exe final.cpp -static -lkernel32 -luser32 -lwinmm -mwindows
+//cp: g++ -o necomizer.exe necomizer.cpp -static -lkernel32 -luser32 -lwinmm -mwindows
