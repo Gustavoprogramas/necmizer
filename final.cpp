@@ -5,12 +5,21 @@
 #include <thread>
 #include <string>
 #include <stdio.h>
+#include <vector>
 
+// variaveis globais da interface
 HWND janelaPrincipal, caixaTextoProcesso, botaoSelecionar, caixaTextoDll, botaoProcurarDll;
 HWND botaoApenasInjetar, botaoApenasOtimizar, botaoAmbos, textoStatus;
 HWND janelaListaProcessos, caixaListaProcessos, botaoAtualizarLista, botaoConfirmarLista;
 
-bool VerificarCompatibilidade(HANDLE manipuladorProcesso) {
+struct SinalizadorMemoria {
+    const char* nome;
+    uintptr_t deslocamento;
+    int valor;
+};
+
+// --- NOVA FUNÇÃO DE VERIFICAÇÃO ---
+bool JogoEh32Bits(HANDLE manipuladorProcesso) {
     BOOL ehWow64 = FALSE;
     IsWow64Process(manipuladorProcesso, &ehWow64);
 
@@ -20,23 +29,7 @@ bool VerificarCompatibilidade(HANDLE manipuladorProcesso) {
     bool sistemaEh64Bits = (infoSistema.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 || 
                             infoSistema.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64);
     
-    bool jogoEh32Bits = sistemaEh64Bits ? (ehWow64 != FALSE) : true;
-
-    #if defined(_WIN64)
-        bool injetorEh32Bits = false; 
-    #else
-        bool injetorEh32Bits = true;  
-    #endif
-
-    if (jogoEh32Bits != injetorEh32Bits) {
-        if (injetorEh32Bits) {
-            MessageBoxA(NULL, "Erro: O injetor é 32 bits, mas o jogo é 64 bits!", "Incompatibilidade de arquitetura", MB_ICONERROR);
-        } else {
-            MessageBoxA(NULL, "Erro: O injetor é 64 bits, mas o jogo é 32 bits!", "Incompatibilidade de arquitetura", MB_ICONERROR);
-        }
-        return false;
-    }
-    return true; 
+    return sistemaEh64Bits ? (ehWow64 != FALSE) : true;
 }
 
 DWORD ObterIdProcessoPorNome(const char* nomeProcesso) {
@@ -56,6 +49,26 @@ DWORD ObterIdProcessoPorNome(const char* nomeProcesso) {
     return 0;
 }
 
+// obter endereco base do modulo
+uintptr_t ObterEnderecoBaseModulo(DWORD idProcesso, const char* nomeModulo) {
+    uintptr_t enderecoBase = 0;
+    HANDLE snapshotProcessos = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, idProcesso);
+    if (snapshotProcessos != INVALID_HANDLE_VALUE) {
+        MODULEENTRY32 entradaModulo;
+        entradaModulo.dwSize = sizeof(entradaModulo);
+        if (Module32First(snapshotProcessos, &entradaModulo)) {
+            do {
+                if (!_stricmp(entradaModulo.szModule, nomeModulo)) {
+                    enderecoBase = (uintptr_t)entradaModulo.modBaseAddr;
+                    break;
+                }
+            } while (Module32Next(snapshotProcessos, &entradaModulo));
+        }
+    }
+    CloseHandle(snapshotProcessos);
+    return enderecoBase;
+}
+
 bool InjetarDll(HANDLE manipuladorProcesso, const char* caminhoDll) {
     char caminhoCompleto[MAX_PATH];
     if (GetFullPathNameA(caminhoDll, MAX_PATH, caminhoCompleto, NULL) == 0) return false;
@@ -64,6 +77,8 @@ bool InjetarDll(HANDLE manipuladorProcesso, const char* caminhoDll) {
     if (!enderecoDll) return false;
 
     WriteProcessMemory(manipuladorProcesso, enderecoDll, (LPVOID)caminhoCompleto, strlen(caminhoCompleto) + 1, 0);
+   
+    
 
     HMODULE moduloKernel = GetModuleHandleA("Kernel32.dll");
     LPVOID enderecoLoadLibrary = (LPVOID)GetProcAddress(moduloKernel, "LoadLibraryA");
@@ -80,8 +95,8 @@ bool InjetarDll(HANDLE manipuladorProcesso, const char* caminhoDll) {
     return true;
 }
 
-void ExecutarAcao(std::string nomeProcesso, std::string caminhoDll, bool flagInjetar, bool flagOtimizar) {
-    std::string mensagemStatus = "Status: Aguardando " + nomeProcesso + "...";
+void ExecutarAcao(std::string nomeProcesso, std::string caminhoDll, bool flagInjetarDll, bool flagOtimizar, bool flagInjetarSinalizadores) {
+    std::string mensagemStatus = "aguardando " + nomeProcesso + "...";
     SetWindowTextA(textoStatus, mensagemStatus.c_str());
     
     DWORD idProcesso = 0;
@@ -92,7 +107,7 @@ void ExecutarAcao(std::string nomeProcesso, std::string caminhoDll, bool flagInj
 
     HANDLE manipuladorProcesso = OpenProcess(PROCESS_ALL_ACCESS, FALSE, idProcesso);
     if (manipuladorProcesso) {
-        SetWindowTextA(textoStatus, "Status: Processo encontrado. Aplicando...");
+        SetWindowTextA(textoStatus, "processo encontrado");
 
         if (flagOtimizar) {
             SetPriorityClass(manipuladorProcesso, HIGH_PRIORITY_CLASS);
@@ -117,28 +132,77 @@ void ExecutarAcao(std::string nomeProcesso, std::string caminhoDll, bool flagInj
             }
         }
 
-        if (flagInjetar) {
-            if (!VerificarCompatibilidade(manipuladorProcesso)) {
-                SetWindowTextA(textoStatus, "Status: Falha - Arquiteturas incompatíveis.");
-                CloseHandle(manipuladorProcesso);
-                return;
-            }
+        // --- NOVA LÓGICA DE INJEÇÃO COM HELPER ---
+        if (flagInjetarDll) {
+            bool jogo32 = JogoEh32Bits(manipuladorProcesso);
+            
+            #if defined(_WIN64)
+                bool injetor32 = false;
+            #else
+                bool injetor32 = true;
+            #endif
 
-            if (!InjetarDll(manipuladorProcesso, caminhoDll.c_str())) {
-                SetWindowTextA(textoStatus, "Status: Falha ao injetar a DLL.");
-                CloseHandle(manipuladorProcesso);
-                return;
+            if (jogo32 != injetor32) {
+                if (!injetor32 && jogo32) {
+                    SetWindowTextA(textoStatus, "usando helper 32 bits...");
+                    
+                    std::string comando = "helper32.exe " + std::to_string(idProcesso) + " \"" + caminhoDll + "\"";
+                    
+                    STARTUPINFOA si = { sizeof(si) };
+                    PROCESS_INFORMATION pi;
+                    si.dwFlags = STARTF_USESHOWWINDOW;
+                    si.wShowWindow = SW_HIDE; 
+
+                    std::vector<char> comandoMutavel(comando.begin(), comando.end());
+                    comandoMutavel.push_back('\0');
+
+                    if (CreateProcessA(NULL, comandoMutavel.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+                        WaitForSingleObject(pi.hProcess, INFINITE);
+                        
+                        DWORD codigoSaidaHelper;
+                        GetExitCodeProcess(pi.hProcess, &codigoSaidaHelper);
+                        
+                        CloseHandle(pi.hProcess);
+                        CloseHandle(pi.hThread);
+
+                        if (codigoSaidaHelper != 0) {
+                            SetWindowTextA(textoStatus, "falha ao injetar via helper");
+                            CloseHandle(manipuladorProcesso);
+                            return;
+                        }
+                    } else {
+                        MessageBoxA(NULL, "Arquivo helper32.exe nao encontrado na pasta do Necomizer!", "Erro Helper", MB_ICONERROR);
+                        SetWindowTextA(textoStatus, "helper ausente");
+                        CloseHandle(manipuladorProcesso);
+                        return;
+                    }
+                } else {
+                    MessageBoxA(NULL, "Erro: O injetor e 32 bits e o jogo e 64 bits.", "Incompatibilidade", MB_ICONERROR);
+                    SetWindowTextA(textoStatus, "falha nas arquiteturas");
+                    CloseHandle(manipuladorProcesso);
+                    return;
+                }
+            } else {
+                if (!InjetarDll(manipuladorProcesso, caminhoDll.c_str())) {
+                    SetWindowTextA(textoStatus, "falha ao injetar a dll");
+                    CloseHandle(manipuladorProcesso);
+                    return;
+                }
             }
         }
+        // -----------------------------------------
 
-        SetWindowTextA(textoStatus, "Sucesso");
+ else {
+            SetWindowTextA(textoStatus, "sucesso");
+        }
+
         CloseHandle(manipuladorProcesso);
     } else {
-        SetWindowTextA(textoStatus, "Status: ERRO! Execute como administrador.");
+        SetWindowTextA(textoStatus, "execute como administrador");
     }
 }
 
-void IniciarThread(bool flagInjetar, bool flagOtimizar) {
+void IniciarThread(bool flagInjetarDll, bool flagOtimizar, bool flagInjetarSinalizadores) {
     char bufferProcesso[MAX_PATH];
     GetWindowTextA(caixaTextoProcesso, bufferProcesso, MAX_PATH);
     std::string nomeProcesso(bufferProcesso);
@@ -148,16 +212,16 @@ void IniciarThread(bool flagInjetar, bool flagOtimizar) {
     std::string caminhoDll(bufferDll);
 
     if (nomeProcesso.empty()) {
-        SetWindowTextA(textoStatus, "Status: Selecione um processo primeiro!");
+        SetWindowTextA(textoStatus, "selecione um processo primeiro");
         return;
     }
     
-    if (flagInjetar && caminhoDll.empty()) {
-        SetWindowTextA(textoStatus, "Status: Selecione uma DLL primeiro!");
+    if (flagInjetarDll && caminhoDll.empty()) {
+        SetWindowTextA(textoStatus, "selecione uma dll primeiro");
         return;
     }
 
-    std::thread(ExecutarAcao, nomeProcesso, caminhoDll, flagInjetar, flagOtimizar).detach();
+    std::thread(ExecutarAcao, nomeProcesso, caminhoDll, flagInjetarDll, flagOtimizar, flagInjetarSinalizadores).detach();
 }
 
 void SelecionarArquivoDll() {
@@ -251,15 +315,16 @@ LRESULT CALLBACK ProcedimentoJanelaPrincipal(HWND hwnd, UINT uMsg, WPARAM wParam
 
             botaoApenasInjetar = CreateWindowA("BUTTON", "Apenas injetar", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 20, 130, 250, 35, hwnd, (HMENU)1, NULL, NULL);
             botaoApenasOtimizar = CreateWindowA("BUTTON", "Apenas otimizar CPU", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 20, 175, 250, 35, hwnd, (HMENU)2, NULL, NULL);
-            botaoAmbos = CreateWindowA("BUTTON", "Injetar e otimizar", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 20, 220, 250, 35, hwnd, (HMENU)3, NULL, NULL);
+            
+            botaoAmbos = CreateWindowA("BUTTON", "Nem eu sei, nao aperta.", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 20, 220, 250, 35, hwnd, (HMENU)3, NULL, NULL);
 
-            textoStatus = CreateWindowA("STATIC", "Status: Aguardando...", WS_VISIBLE | WS_CHILD, 20, 265, 250, 40, hwnd, NULL, NULL, NULL);
+            textoStatus = CreateWindowA("STATIC", "aguardando...", WS_VISIBLE | WS_CHILD, 20, 265, 250, 40, hwnd, NULL, NULL, NULL);
             break;
 
         case WM_COMMAND:
-            if (LOWORD(wParam) == 1) IniciarThread(true, false);
-            if (LOWORD(wParam) == 2) IniciarThread(false, true);
-            if (LOWORD(wParam) == 3) IniciarThread(true, true);
+            if (LOWORD(wParam) == 1) IniciarThread(true, false, false);
+            if (LOWORD(wParam) == 2) IniciarThread(false, true, false);
+            if (LOWORD(wParam) == 3) IniciarThread(false, true, true);
             
             if (LOWORD(wParam) == 4) { 
                 AtualizarListaProcessos();
@@ -283,6 +348,7 @@ int APIENTRY WinMain(HINSTANCE instanciaAplicativo, HINSTANCE instanciaAnterior,
     classePrincipal.hInstance = instanciaAplicativo;
     classePrincipal.lpszClassName = "ClasseOtimizadorGenerico";
     classePrincipal.hbrBackground = (HBRUSH)(COLOR_WINDOW);
+    classePrincipal.hIcon = LoadIcon(instanciaAplicativo, MAKEINTRESOURCE(1));
     RegisterClassA(&classePrincipal);
 
     WNDCLASSA classeLista = {0};
@@ -311,4 +377,5 @@ int APIENTRY WinMain(HINSTANCE instanciaAplicativo, HINSTANCE instanciaAnterior,
     }
     return 0;
 }
-//cp: g++ -o necomizer.exe necomizer.cpp -static -lkernel32 -luser32 -lwinmm -mwindows
+
+//cp: g++ -o necomizer.exe necomizer.cpp recurso.o -static -static-libgcc -static-libstdc++ -lkernel32 -luser32 -lwinmm -mwindows -m64
