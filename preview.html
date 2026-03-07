@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualizador de Rastro Osu! em Tempo Real</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #222;
+            color: #eee;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+        }
+
+        #controls-pane {
+            width: 350px;
+            padding: 20px;
+            background-color: #333;
+            overflow-y: auto;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.5);
+        }
+
+        #preview-pane {
+            flex-grow: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #000; 
+            cursor: crosshair; 
+        }
+
+        canvas {
+            border: 1px solid #555;
+            background-color: #111; 
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+
+        input[type="range"] {
+            width: 100%;
+        }
+
+        .value-display {
+            float: right;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        
+        h2 { margin-top: 0; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        hr { border-color: #555; }
+    </style>
+</head>
+<body>
+
+    <div id="controls-pane">
+        <h2>Controles do Rastro</h2>
+
+        <div class="control-group">
+            <label for="trailLength">Tamanho da Cauda (Trail Length): <span id="val-trailLength" class="value-display">30</span></label>
+            <input type="range" id="trailLength" min="5" max="100" value="30">
+        </div>
+
+        <div class="control-group">
+            <label for="blurSize">Grossura Base (Size): <span id="val-blurSize" class="value-display">20.0</span></label>
+            <input type="range" id="blurSize" min="5" max="100" step="0.1" value="20.0">
+        </div>
+
+        <div class="control-group">
+            <label for="maxOpacity">Opacidade Máx (0-255): <span id="val-maxOpacity" class="value-display">200</span></label>
+            <input type="range" id="maxOpacity" min="10" max="255" value="200">
+        </div>
+
+        <div class="control-group">
+            <label for="opacityDecay">Decaimento Opacidade: <span id="val-opacityDecay" class="value-display">1.5</span></label>
+            <input type="range" id="opacityDecay" min="0.1" max="3.0" step="0.1" value="1.5">
+        </div>
+
+        <div class="control-group">
+            <label for="sizeDecay">Afinamento da Ponta: <span id="val-sizeDecay" class="value-display">0.8</span></label>
+            <input type="range" id="sizeDecay" min="0.1" max="3.0" step="0.1" value="0.8">
+        </div>
+
+        <hr>
+
+        <div class="control-group">
+            <label for="whiteCenterRatio">Proporção Miolo Branco: <span id="val-whiteCenterRatio" class="value-display">0.85</span></label>
+            <input type="range" id="whiteCenterRatio" min="0.10" max="0.99" step="0.01" value="0.85">
+        </div>
+
+        <div class="control-group">
+            <label>
+                <input type="checkbox" id="enableGlow"> Adicionar Brilho (Glow)
+            </label>
+        </div>
+
+        <div class="control-group">
+            <label>
+                <input type="checkbox" id="enableWhiteCenter" checked> Cursor c/ Centro Branco (Estilo Print)
+            </label>
+        </div>
+
+        <div class="control-group">
+            <label for="colorPicker">Cor do Cursor:</label>
+            <input type="color" id="colorPicker" value="#4cf0bb">
+        </div>
+    </div>
+
+    <div id="preview-pane">
+        <canvas id="cursorCanvas" width="800" height="600"></canvas>
+    </div>
+
+
+    <script>
+        const canvas = document.getElementById('cursorCanvas');
+        const ctx = canvas.getContext('2d');
+
+       
+        let cursorHistory = [];
+        let mousePos = { x: canvas.width / 2, y: canvas.height / 2 };
+        let isMouseOver = false;
+
+        
+        const controls = {
+            trailLength: document.getElementById('trailLength'),
+            blurSize: document.getElementById('blurSize'),
+            maxOpacity: document.getElementById('maxOpacity'),
+            opacityDecay: document.getElementById('opacityDecay'),
+            sizeDecay: document.getElementById('sizeDecay'),
+            whiteCenterRatio: document.getElementById('whiteCenterRatio'),
+            enableGlow: document.getElementById('enableGlow'),
+            enableWhiteCenter: document.getElementById('enableWhiteCenter'),
+            colorPicker: document.getElementById('colorPicker')
+        };
+
+        
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : null;
+        }
+
+        function drawCircle(x, y, radius, r, g, b, a) {
+            ctx.beginPath();
+            ctx.arc(x, y, Math.max(0.1, radius), 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
+            ctx.fill();
+        }
+
+       
+        function animate() {
+         
+            if (isMouseOver) {
+                cursorHistory.push({ ...mousePos });
+                const targetLength = parseInt(controls.trailLength.value);
+                while (cursorHistory.length > targetLength) {
+                    cursorHistory.shift();
+                }
+            }
+
+        
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (cursorHistory.length === 0) {
+                requestAnimationFrame(animate);
+                return;
+            }
+
+      
+            const baseSize = parseFloat(controls.blurSize.value);
+            const maxOpac = parseInt(controls.maxOpacity.value);
+            const opDecay = parseFloat(controls.opacityDecay.value);
+            const szDecay = parseFloat(controls.sizeDecay.value);
+            const rgb = hexToRgb(controls.colorPicker.value);
+            const useGlow = controls.enableGlow.checked;
+            const useWhiteCenter = controls.enableWhiteCenter.checked;
+            const wRatio = parseFloat(controls.whiteCenterRatio.value);
+
+            
+            for (let i = 0; i + 1 < cursorHistory.length; i++) {
+                const point = cursorHistory[i];
+                
+                
+                const alphaRatio = i / (cursorHistory.length - 1);
+                const easeRatio = Math.pow(alphaRatio, opDecay);
+                const alpha = (maxOpac / 255.0) * easeRatio;
+                const size = baseSize * Math.pow(alphaRatio, szDecay);
+
+             
+                if (useGlow) {
+                    ctx.globalCompositeOperation = 'lighter';
+                    drawCircle(point.x, point.y, size * 1.5, rgb.r, rgb.g, rgb.b, alpha * 0.4);
+                    ctx.globalCompositeOperation = 'source-over'; // Volta ao normal
+                }
+
+             
+                drawCircle(point.x, point.y, size, rgb.r, rgb.g, rgb.b, alpha);
+            }
+
+           
+            const head = cursorHistory[cursorHistory.length - 1];
+            const headAlpha = maxOpac / 255.0;
+            const outerRadius = baseSize;
+            const innerRadius = baseSize * wRatio;
+
+           
+            if (useGlow) {
+                ctx.globalCompositeOperation = 'lighter';
+                drawCircle(head.x, head.y, outerRadius * 1.5, rgb.r, rgb.g, rgb.b, headAlpha * 0.35);
+                ctx.globalCompositeOperation = 'source-over';
+            }
+
+            
+            drawCircle(head.x, head.y, outerRadius, rgb.r, rgb.g, rgb.b, headAlpha);
+
+          
+            if (useWhiteCenter) {
+                drawCircle(head.x, head.y, innerRadius, 255, 255, 255, headAlpha);
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+      
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mousePos.x = e.clientX - rect.left;
+            mousePos.y = e.clientY - rect.top;
+        });
+
+        canvas.addEventListener('mouseenter', () => isMouseOver = true);
+        canvas.addEventListener('mouseleave', () => {
+             isMouseOver = false;
+             cursorHistory = []; 
+        });
+
+        
+        Object.keys(controls).forEach(key => {
+            const input = controls[key];
+            const display = document.getElementById(`val-${key}`);
+            if (display && input.type === 'range') {
+                input.addEventListener('input', () => display.textContent = input.value);
+            }
+        });
+
+
+        
+        animate();
+
+    </script>
+</body>
+</html>
