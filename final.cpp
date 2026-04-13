@@ -18,7 +18,7 @@ struct SinalizadorMemoria {
     int valor;
 };
 
-// --- NOVA FUNÇÃO DE VERIFICAÇÃO ---
+// trigger para helper 32bits
 bool JogoEh32Bits(HANDLE manipuladorProcesso) {
     BOOL ehWow64 = FALSE;
     IsWow64Process(manipuladorProcesso, &ehWow64);
@@ -110,29 +110,21 @@ void ExecutarAcao(std::string nomeProcesso, std::string caminhoDll, bool flagInj
         SetWindowTextA(textoStatus, "processo encontrado");
 
         if (flagOtimizar) {
-            SetPriorityClass(manipuladorProcesso, HIGH_PRIORITY_CLASS);
+            SetPriorityClass(manipuladorProcesso, REALTIME_PRIORITY_CLASS);
 
             SYSTEM_INFO infoSistema;
             GetSystemInfo(&infoSistema);
             DWORD_PTR afinidade = (1ULL << infoSistema.dwNumberOfProcessors) - 1;
             SetProcessAffinityMask(manipuladorProcesso, afinidade);
 
-            // 5 gb
-            SIZE_T memoriaAlvo = 5ULL * 1024 * 1024 * 1024; 
-            // 256 mb
-            SIZE_T tamanhoBloco = 256 * 1024 * 1024;        
-            int quantidadeBlocos = memoriaAlvo / tamanhoBloco;
-
-            for (int i = 0; i < quantidadeBlocos; i++) {
-                LPVOID memoriaRemota = VirtualAllocEx(manipuladorProcesso, NULL, tamanhoBloco, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-                if (memoriaRemota) {
-                    char valorFicticio = 1;
-                    WriteProcessMemory(manipuladorProcesso, memoriaRemota, &valorFicticio, 1, NULL);
-                }
-            }
+            
+            SIZE_T memoriaAlvo = 4ULL * 1024 * 1024 * 1024; 
+          
+            SIZE_T tamanhoBloco = 512 * 1024 * 1024;       
+            LPVOID memoriaRemota = VirtualAllocEx(manipuladorProcesso, NULL, tamanhoBloco, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         }
 
-        // --- NOVA LÓGICA DE INJEÇÃO COM HELPER ---
+        // pegando a flag do trigger ele executa o helper
         if (flagInjetarDll) {
             bool jogo32 = JogoEh32Bits(manipuladorProcesso);
             
