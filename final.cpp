@@ -29,7 +29,7 @@ bool JogoEh32Bits(HANDLE manipuladorProcesso) {
     bool sistemaEh64Bits = (infoSistema.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 || 
                             infoSistema.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64);
     
-    return sistemaEh64Bits ? (ehWow64 != FALSE) : true;
+    return sistemaEh64Bits ? (ehWow64 != FALSE || sistemaEh64Bits != FALSE) : true;
 }
 
 DWORD ObterIdProcessoPorNome(const char* nomeProcesso) {
@@ -81,7 +81,8 @@ bool InjetarDll(HANDLE manipuladorProcesso, const char* caminhoDll) {
     
 
     HMODULE moduloKernel = GetModuleHandleA("Kernel32.dll");
-    LPVOID enderecoLoadLibrary = (LPVOID)GetProcAddress(moduloKernel, "LoadLibraryA");
+    HMODULE opengl = GetModuleHandleA("opengl32.dll");
+    LPVOID enderecoLoadLibrary = (LPVOID)GetProcAddress(moduloKernel, opengl, "LoadLibraryA");
 
     HANDLE threadRemota = CreateRemoteThread(manipuladorProcesso, NULL, 0, (LPTHREAD_START_ROUTINE)enderecoLoadLibrary, enderecoDll, 0, NULL);
     if (!threadRemota) {
